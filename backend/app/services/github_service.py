@@ -192,6 +192,110 @@ class GitHubService:
                 )
                 return
 
+    async def add_issue_labels(
+        self,
+        repository_full_name: str,
+        issue_number: int,
+        installation_id: int,
+        labels: list[str],
+    ) -> list[str]:
+        """Add labels to an issue; creates missing labels when possible."""
+        cleaned = [label.strip() for label in labels if label and label.strip()]
+        deduped = list(dict.fromkeys(cleaned))
+        if not deduped:
+            return []
+
+        token = await self.auth.get_installation_token(installation_id)
+        headers = self._build_headers(token)
+        repo_labels = await self._list_repository_labels(
+            repository_full_name=repository_full_name,
+            headers=headers,
+        )
+
+        missing = [label for label in deduped if label.lower() not in repo_labels]
+        if missing:
+            await self._create_missing_labels(
+                repository_full_name=repository_full_name,
+                headers=headers,
+                labels=missing,
+            )
+            repo_labels = await self._list_repository_labels(
+                repository_full_name=repository_full_name,
+                headers=headers,
+            )
+
+        applicable = [label for label in deduped if label.lower() in repo_labels]
+        if not applicable:
+            return []
+
+        url = f"https://api.github.com/repos/{repository_full_name}/issues/{issue_number}/labels"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, headers=headers, json={"labels": applicable})
+            response.raise_for_status()
+        return applicable
+
+    async def _list_repository_labels(
+        self,
+        repository_full_name: str,
+        headers: dict[str, str],
+    ) -> set[str]:
+        """List repository labels as a normalized set."""
+        url = f"https://api.github.com/repos/{repository_full_name}/labels?per_page=100"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+        labels: set[str] = set()
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    name = str(item.get("name", "")).strip().lower()
+                    if name:
+                        labels.add(name)
+        return labels
+
+    async def _create_missing_labels(
+        self,
+        repository_full_name: str,
+        headers: dict[str, str],
+        labels: list[str],
+    ) -> None:
+        """Attempt to create labels that are missing in the repository."""
+        url = f"https://api.github.com/repos/{repository_full_name}/labels"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for label in labels:
+                payload = {
+                    "name": label,
+                    "color": self._label_color(label),
+                    "description": f"Managed by FOSSMate: {label}",
+                }
+                response = await client.post(url, headers=headers, json=payload)
+                if response.status_code in {201, 422}:
+                    continue
+                logger.warning(
+                    "Unable to create label '%s' for %s status=%s body=%s",
+                    label,
+                    repository_full_name,
+                    response.status_code,
+                    response.text[:400],
+                )
+
+    @staticmethod
+    def _label_color(label: str) -> str:
+        palette = {
+            "bug": "d73a4a",
+            "enhancement": "a2eeef",
+            "documentation": "0075ca",
+            "good first issue": "7057ff",
+            "help wanted": "008672",
+            "question": "d876e3",
+            "needs triage": "fbca04",
+            "dependencies": "0366d6",
+            "testing": "5319e7",
+            "refactor": "cfd3d7",
+        }
+        return palette.get(label.lower(), "ededed")
+
     def _build_headers(self, token: str) -> dict[str, str]:
         return {
             "Authorization": f"token {token}",

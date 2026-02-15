@@ -114,28 +114,65 @@ class WebhookProcessor:
 
         if event.event_type == "issues" and event.action == "opened":
             summary = await self.review_service.summarize_issue(event)
+            suggested_labels = await self.review_service.suggest_issue_labels(event)
+            applied_labels: list[str] = []
+            label_error: str | None = None
+
+            if event.installation_id and event.repository_full_name and event.issue_number:
+                try:
+                    applied_labels = await self.github_service.add_issue_labels(
+                        repository_full_name=event.repository_full_name,
+                        issue_number=event.issue_number,
+                        installation_id=event.installation_id,
+                        labels=suggested_labels,
+                    )
+                except Exception as exc:
+                    label_error = str(exc)
+                    logger.exception(
+                        "Failed applying issue labels for %s#%s",
+                        event.repository_full_name,
+                        event.issue_number,
+                    )
+
+            summary_with_labels = summary
+            if suggested_labels:
+                labels_preview = ", ".join(f"`{label}`" for label in suggested_labels)
+                summary_with_labels = f"{summary}\n\nSuggested labels: {labels_preview}"
+
             await self._record_non_pr_run(
                 session=session,
                 delivery_log_id=delivery_log.id,
                 event=event,
                 run_type="issue_summary",
                 status="done",
-                result_json={"summary": summary},
+                result_json={
+                    "summary": summary,
+                    "suggested_labels": suggested_labels,
+                    "applied_labels": applied_labels,
+                    "label_error": label_error,
+                },
             )
             if event.installation_id and event.repository_full_name and event.issue_number:
                 marker = "<!-- fossmate:issue-summary -->"
-                await self.github_service.upsert_issue_comment(
-                    repository_full_name=event.repository_full_name,
-                    issue_number=event.issue_number,
-                    installation_id=event.installation_id,
-                    body=summary,
-                    marker=marker,
-                )
+                try:
+                    await self.github_service.upsert_issue_comment(
+                        repository_full_name=event.repository_full_name,
+                        issue_number=event.issue_number,
+                        installation_id=event.installation_id,
+                        body=summary_with_labels,
+                        marker=marker,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed posting issue summary for %s#%s",
+                        event.repository_full_name,
+                        event.issue_number,
+                    )
             return
 
         if event.event_type == "issue_comment" and event.action == "created":
-            comment_text = str(event.payload.get("comment", {}).get("body", "")).lower()
-            if "can i work on this" not in comment_text and "i can work on this" not in comment_text:
+            comment_text = str(event.payload.get("comment", {}).get("body", ""))
+            if not self.review_service.is_onboarding_request(comment_text):
                 return
 
             reply = await self.review_service.onboarding_reply(event)
@@ -149,13 +186,20 @@ class WebhookProcessor:
             )
             if event.installation_id and event.repository_full_name and event.issue_number:
                 marker = "<!-- fossmate:onboarding -->"
-                await self.github_service.upsert_issue_comment(
-                    repository_full_name=event.repository_full_name,
-                    issue_number=event.issue_number,
-                    installation_id=event.installation_id,
-                    body=reply,
-                    marker=marker,
-                )
+                try:
+                    await self.github_service.upsert_issue_comment(
+                        repository_full_name=event.repository_full_name,
+                        issue_number=event.issue_number,
+                        installation_id=event.installation_id,
+                        body=reply,
+                        marker=marker,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed posting onboarding reply for %s#%s",
+                        event.repository_full_name,
+                        event.issue_number,
+                    )
 
     async def _process_gitlab_event(
         self,

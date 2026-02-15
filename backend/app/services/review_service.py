@@ -21,6 +21,18 @@ from app.services.llm_service import LLMProvider
 logger = logging.getLogger(__name__)
 
 REVIEW_CATEGORIES = ("feature", "fix", "refactor", "docs", "test", "chore", "mixed")
+ISSUE_LABEL_CANDIDATES = (
+    "bug",
+    "enhancement",
+    "documentation",
+    "good first issue",
+    "help wanted",
+    "question",
+    "needs triage",
+    "dependencies",
+    "testing",
+    "refactor",
+)
 
 
 @dataclass(slots=True)
@@ -72,13 +84,85 @@ class ReviewService:
             logger.exception("Issue summarization failed; falling back to heuristic summary.")
             return f"- {issue_title}\n- Review details and assign ownership\n- Suggest labels"
 
+    async def suggest_issue_labels(self, event: NormalizedEvent) -> list[str]:
+        """Suggest issue labels for maintainer triage."""
+        issue_title = (event.issue_title or "").lower()
+        issue_body = str(event.payload.get("issue", {}).get("body", "")).lower()
+        text = f"{issue_title}\n{issue_body}"
+
+        heuristic: list[str] = ["needs triage"]
+        if any(token in text for token in ("bug", "error", "crash", "failing", "broken")):
+            heuristic.append("bug")
+        if any(token in text for token in ("docs", "documentation", "readme", "contributing")):
+            heuristic.append("documentation")
+        if any(token in text for token in ("feature", "enhancement", "improve", "proposal")):
+            heuristic.append("enhancement")
+        if any(token in text for token in ("test", "coverage", "ci")):
+            heuristic.append("testing")
+        if any(token in text for token in ("first issue", "new contributor", "beginner")):
+            heuristic.append("good first issue")
+            heuristic.append("help wanted")
+        if "dependency" in text or "dependencies" in text:
+            heuristic.append("dependencies")
+        if any(token in text for token in ("question", "how do", "how to", "?")):
+            heuristic.append("question")
+
+        prompt = (
+            "Suggest up to 4 GitHub labels for this issue.\n"
+            "Respond as JSON array and only use labels from this allowlist:\n"
+            f"{list(ISSUE_LABEL_CANDIDATES)}\n"
+            f"Issue title: {event.issue_title}\n"
+            f"Issue body: {event.payload.get('issue', {}).get('body', '')}\n"
+        )
+
+        llm_labels: list[str] = []
+        try:
+            raw = await self.llm_provider.generate(prompt)
+            parsed = json.loads(self._extract_json_array(raw))
+            if isinstance(parsed, list):
+                for item in parsed:
+                    value = str(item).strip().lower()
+                    if value in ISSUE_LABEL_CANDIDATES:
+                        llm_labels.append(value)
+        except Exception:  # pragma: no cover - runtime resilience
+            logger.exception("Issue label suggestion failed; using heuristic labels.")
+
+        merged: list[str] = []
+        for label in heuristic + llm_labels:
+            if label in ISSUE_LABEL_CANDIDATES and label not in merged:
+                merged.append(label)
+            if len(merged) >= 4:
+                break
+        return merged or ["needs triage"]
+
+    def is_onboarding_request(self, comment_text: str) -> bool:
+        """Detect contributor-intent comments asking to work on an issue."""
+        text = comment_text.lower().strip()
+        patterns = (
+            r"\bcan i work on this\b",
+            r"\bi can work on this\b",
+            r"\bi(?:'| )d like to work on this\b",
+            r"\bhow (?:do|can) i work on this\b",
+            r"\bcan you assign (?:me|this)\b",
+            r"\bassign this to me\b",
+            r"\bhow to contribute\b",
+            r"\bwhere should i start\b",
+            r"\bnew contributor\b",
+            r"\bfirst issue\b",
+            r"\bcan i take this\b",
+        )
+        return any(re.search(pattern, text) for pattern in patterns)
+
     async def onboarding_reply(self, event: NormalizedEvent) -> str:
         """Generate contributor onboarding guidance comment."""
         repo = event.repository_full_name or "this repository"
         return (
-            f"Thanks for offering to contribute to **{repo}**. "
-            "Please read `README` and `CONTRIBUTING` first, share your proposed approach, "
-            "and wait for maintainer confirmation before starting implementation."
+            f"Thanks for offering to contribute to **{repo}**.\n\n"
+            "Here is the fastest path:\n"
+            "1. Read `README` and `CONTRIBUTING`.\n"
+            "2. Comment with your planned approach and scope.\n"
+            "3. Wait for maintainer confirmation/assignment.\n"
+            "4. Open a draft PR early so review can start sooner."
         )
 
     async def _load_pr_files(self, event: NormalizedEvent) -> list[dict[str, Any]]:
@@ -210,7 +294,7 @@ class ReviewService:
                         continue
                     suggestions.append(
                         ReviewSuggestion(
-                            file_path=item.get("file_path"),
+                            file_path=self._normalize_file_path(item.get("file_path")),
                             title=str(item.get("title", "Review suggestion")),
                             details=str(item.get("details", "No details provided.")),
                             severity=str(item.get("severity", "medium")).lower(),
@@ -282,3 +366,30 @@ class ReviewService:
         if start >= 0 and end > start:
             return raw[start : end + 1]
         return raw
+
+    @staticmethod
+    def _extract_json_array(raw: str) -> str:
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            if raw.lower().startswith("json"):
+                raw = raw[4:]
+        start = raw.find("[")
+        end = raw.rfind("]")
+        if start >= 0 and end > start:
+            return raw[start : end + 1]
+        return "[]"
+
+    @staticmethod
+    def _normalize_file_path(file_path: Any) -> str | None:
+        if file_path is None:
+            return None
+        if isinstance(file_path, str):
+            normalized = file_path.strip()
+            return normalized or None
+        if isinstance(file_path, list):
+            for item in file_path:
+                if isinstance(item, str) and item.strip():
+                    return item.strip()
+            return None
+        return str(file_path).strip() or None

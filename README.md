@@ -23,6 +23,8 @@ Implemented now:
 
 - GitHub webhook ingestion with signature verification
 - Idempotent delivery logging and queue-backed async processing
+- Issue automation (`issues.opened` summary + label suggestion, `issue_comment.created` onboarding intent replies)
+- PR automation (`pull_request.opened/synchronize` summary, file-level notes, suggestions, advisory scoring)
 - Persistent review artifacts (`review_runs`, `review_findings`, `score_cards`, `developer_metrics`)
 - Provider abstraction layer with fallback and multi-provider matrix
 - Async FastAPI + SQLAlchemy foundation with admin replay/status endpoints
@@ -131,6 +133,7 @@ Recommended permissions:
 
 - Issues: Read & write
 - Pull requests: Read & write
+- Checks: Read & write
 - Contents: Read-only
 - Metadata: Read-only
 
@@ -144,6 +147,11 @@ Recommended events:
 
 Install app on target repos, then open an issue/PR to trigger webhook flow.
 
+Local PAT fallback note:
+
+- `GITHUB_TOKEN` is for local-only fallback when app private key is not configured.
+- That token must include permissions to write issue comments/labels and check runs, otherwise GitHub returns `403`.
+
 ## Environment Variables
 
 | Variable | Required | Description |
@@ -153,6 +161,7 @@ Install app on target repos, then open an issue/PR to trigger webhook flow.
 | `GITHUB_APP_ID` | Yes | GitHub App ID |
 | `GITHUB_PRIVATE_KEY` | Yes | GitHub App private key |
 | `GITHUB_WEBHOOK_SECRET` | Yes | Webhook signature secret |
+| `GITHUB_TOKEN` | No | Local fallback token when running without App private key |
 | `LLM_PROVIDER` | Yes | `ollama`, `custom`, `gemini`, `openai`, `openrouter`, `azure_openai`, `deepseek`, `deepseek_r1` |
 | `LLM_MODEL_NAME` | Yes | Model name |
 | `LLM_ENDPOINT` | Depends | Required for `ollama/custom` |
