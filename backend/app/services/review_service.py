@@ -153,6 +153,47 @@ class ReviewService:
         )
         return any(re.search(pattern, text) for pattern in patterns)
 
+    def is_assistant_mention(self, comment_text: str, assistant_handle: str) -> bool:
+        """Detect `@assistant` or slash-command invocation in a comment."""
+        handle = assistant_handle.lower().strip().lstrip("@")
+        text = comment_text.lower()
+        mention_pattern = rf"@{re.escape(handle)}(?:\b|[^a-z0-9_-])"
+        slash_pattern = rf"/{re.escape(handle)}(?:\b|[^a-z0-9_-])"
+        return bool(re.search(mention_pattern, text) or re.search(slash_pattern, text))
+
+    async def answer_issue_comment(
+        self,
+        event: NormalizedEvent,
+        comment_text: str,
+        assistant_handle: str,
+    ) -> str:
+        """Generate an assistant reply for issue/PR thread comments."""
+        repo = event.repository_full_name or "unknown repository"
+        issue_title = event.issue_title or "Untitled issue"
+        issue_body = str(event.payload.get("issue", {}).get("body", ""))[:4000]
+        pr_title = event.pr_title or str(event.payload.get("pull_request", {}).get("title", ""))
+
+        prompt = (
+            "You are FOSSMate, an AI maintainer assistant for open-source projects.\n"
+            "Answer the contributor's comment clearly and actionably.\n"
+            "If maintainer approval is needed, say so.\n"
+            "Keep answer concise (4-10 lines) and practical.\n\n"
+            f"Repository: {repo}\n"
+            f"Issue/PR title: {issue_title or pr_title}\n"
+            f"Issue body/context:\n{issue_body}\n\n"
+            f"Assistant handle: @{assistant_handle}\n"
+            f"Contributor comment:\n{comment_text}\n"
+        )
+
+        try:
+            return (await self.llm_provider.generate(prompt)).strip()
+        except Exception:  # pragma: no cover - runtime resilience
+            logger.exception("Issue comment answer generation failed; using fallback response.")
+            return (
+                "Thanks for the comment. Share your proposed approach, expected files to change, "
+                "and test plan. A maintainer can confirm scope before you start implementation."
+            )
+
     async def onboarding_reply(self, event: NormalizedEvent) -> str:
         """Generate contributor onboarding guidance comment."""
         repo = event.repository_full_name or "this repository"

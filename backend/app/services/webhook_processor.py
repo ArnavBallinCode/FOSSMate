@@ -170,36 +170,11 @@ class WebhookProcessor:
                     )
             return
 
-        if event.event_type == "issue_comment" and event.action == "created":
-            comment_text = str(event.payload.get("comment", {}).get("body", ""))
-            if not self.review_service.is_onboarding_request(comment_text):
+        if event.event_type in {"issue_comment", "pull_request_review_comment"} and event.action == "created":
+            if not feature_flags.get("comment_auto_reply", True):
                 return
-
-            reply = await self.review_service.onboarding_reply(event)
-            await self._record_non_pr_run(
-                session=session,
-                delivery_log_id=delivery_log.id,
-                event=event,
-                run_type="issue_onboarding",
-                status="done",
-                result_json={"reply": reply},
-            )
-            if event.installation_id and event.repository_full_name and event.issue_number:
-                marker = "<!-- fossmate:onboarding -->"
-                try:
-                    await self.github_service.upsert_issue_comment(
-                        repository_full_name=event.repository_full_name,
-                        issue_number=event.issue_number,
-                        installation_id=event.installation_id,
-                        body=reply,
-                        marker=marker,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed posting onboarding reply for %s#%s",
-                        event.repository_full_name,
-                        event.issue_number,
-                    )
+            await self._process_comment_reply(session, delivery_log, event, feature_flags)
+            return
 
     async def _process_gitlab_event(
         self,
@@ -215,6 +190,90 @@ class WebhookProcessor:
             status="done",
             result_json={"message": "GitLab processing pipeline placeholder accepted event."},
         )
+
+    async def _process_comment_reply(
+        self,
+        session: AsyncSession,
+        delivery_log: DeliveryLog,
+        event: NormalizedEvent,
+        feature_flags: dict[str, bool],
+    ) -> None:
+        comment = event.payload.get("comment", {})
+        sender = event.payload.get("sender", {})
+        comment_text = str(comment.get("body", "")).strip()
+        comment_id = comment.get("id")
+        sender_login = str(sender.get("login", "")).strip()
+        sender_type = str(sender.get("type", "")).strip().lower()
+
+        if not comment_text:
+            return
+        if sender_type == "bot" or sender_login.endswith("[bot]"):
+            return
+        if "<!-- fossmate:" in comment_text.lower():
+            return
+
+        assistant_handle = self.settings.assistant_handle
+        reply_all_comments = feature_flags.get("comment_reply_all", True)
+        should_reply = reply_all_comments or self.review_service.is_assistant_mention(
+            comment_text=comment_text,
+            assistant_handle=assistant_handle,
+        )
+        if not should_reply:
+            return
+
+        target_issue_number = event.issue_number or event.pr_number
+        if not event.installation_id or not event.repository_full_name or not target_issue_number:
+            return
+
+        if self.review_service.is_onboarding_request(comment_text):
+            reply = await self.review_service.onboarding_reply(event)
+            run_type = "issue_onboarding"
+            marker_prefix = "onboarding"
+        else:
+            reply = await self.review_service.answer_issue_comment(
+                event=event,
+                comment_text=comment_text,
+                assistant_handle=assistant_handle,
+            )
+            run_type = "comment_assistant"
+            marker_prefix = "comment-assistant"
+
+        marker = (
+            f"<!-- fossmate:{marker_prefix}:{comment_id} -->"
+            if comment_id
+            else f"<!-- fossmate:{marker_prefix} -->"
+        )
+
+        await self._record_non_pr_run(
+            session=session,
+            delivery_log_id=delivery_log.id,
+            event=event,
+            run_type=run_type,
+            status="done",
+            result_json={
+                "reply": reply,
+                "source_comment_id": comment_id,
+                "sender_login": sender_login,
+                "reply_all_comments": reply_all_comments,
+                "assistant_handle": assistant_handle,
+            },
+        )
+
+        try:
+            await self.github_service.upsert_issue_comment(
+                repository_full_name=event.repository_full_name,
+                issue_number=target_issue_number,
+                installation_id=event.installation_id,
+                body=reply,
+                marker=marker,
+            )
+        except Exception:
+            logger.exception(
+                "Failed posting automated comment reply for %s#%s (event=%s)",
+                event.repository_full_name,
+                target_issue_number,
+                event.event_type,
+            )
 
     async def _run_pull_request_review(
         self,
