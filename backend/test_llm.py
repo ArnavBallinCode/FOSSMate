@@ -1,4 +1,4 @@
-"""Simple Gemini smoke test for FOSSMate LLM provider."""
+"""Simple provider smoke test for FOSSMate LLM abstraction."""
 
 from __future__ import annotations
 
