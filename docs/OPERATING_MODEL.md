@@ -1,52 +1,36 @@
 # FOSSMate Operating Model
 
-This document explains how FOSSMate is expected to run in real repositories.
+## Core Guarantee
 
-## Deployment Modes
+FOSSMate core automation and retrieval path must run on open/self-hosted infrastructure.
 
-1. Single-tenant self-hosted:
-   - One team hosts one FOSSMate instance for its repos.
-2. Multi-tenant self-hosted:
-   - One instance serves multiple GitHub App installations.
-3. Managed SaaS (future):
-   - Hosted FOSSMate with onboarding and billing.
+Required core services:
 
-## Core Runtime Components
+- GitHub App webhook endpoint
+- Async processing layer
+- SQL metadata store
+- Qdrant vector store
+- Local or self-hosted inference (default: Ollama)
 
-- API server:
-  - receives webhook events
-  - verifies signatures
-  - stores events
-- Processing layer:
-  - asynchronous task execution for summaries/comments/indexing
-- Data stores:
-  - SQL metadata/event history
-  - vector store for retrieval context
-- LLM layer:
-  - provider abstraction with runtime provider selection
+## Adapter Policy
 
-## Event Lifecycle (Planned)
+- Proprietary providers are optional adapters.
+- No core feature should be blocked on Gemini/OpenAI availability.
+- Adapter-specific logic should remain isolated in provider classes.
 
-1. GitHub sends event -> `/webhooks/github`.
-2. Event validated and persisted.
-3. Worker picks event and maps to handler.
-4. Handler prepares prompt + retrieval context (if needed).
-5. LLM response is post-processed and policy-filtered.
-6. GitHub API posts comment/label updates.
-7. Outcome saved for auditability.
+## Event Lifecycle
 
-## Safety and Governance
+1. GitHub sends event to `/webhooks/github`.
+2. Signature verified with webhook secret.
+3. Payload persisted to `webhook_events`.
+4. Background handler processes event.
+5. Handler retrieves context (when indexed) from Qdrant.
+6. Inference provider generates output.
+7. Response is posted to GitHub and outcome persisted.
 
-- Signatures validated for all webhook requests.
-- Minimal GitHub permissions should be enforced.
-- Installation-level config controls behavior per repository.
-- Store only required metadata/content slices.
-- Keep an audit trail of inbound events and outbound actions.
-
-## What Repo Maintainers Experience
+## Maintainer Experience
 
 - Install app on repository.
-- Open an issue or PR as usual.
-- FOSSMate posts summary and actionable guidance.
-- Contributor asks to work on issue -> onboarding response appears.
-- Team can tune behavior through config (future admin endpoints).
+- Keep normal issue/PR workflow.
+- Receive summaries, suggestions, and onboarding guidance automatically.
+- Tune behavior via installation-level config (planned).

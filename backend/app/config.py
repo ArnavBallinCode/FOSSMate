@@ -34,10 +34,10 @@ class Settings(BaseSettings):
     ngrok_authtoken: str | None = Field(default=None, validation_alias="NGROK_AUTHTOKEN")
 
     llm_provider: Literal["gemini", "openai", "ollama", "custom"] = Field(
-        default="gemini", validation_alias="LLM_PROVIDER"
+        default="ollama", validation_alias="LLM_PROVIDER"
     )
     llm_api_key: str | None = Field(default=None, validation_alias="LLM_API_KEY")
-    llm_model_name: str = Field(default="gemini-2.0-flash", validation_alias="LLM_MODEL_NAME")
+    llm_model_name: str = Field(default="llama3.1", validation_alias="LLM_MODEL_NAME")
     llm_embedding_model: str = Field(
         default="models/text-embedding-004", validation_alias="LLM_EMBEDDING_MODEL"
     )

@@ -1,42 +1,39 @@
 # FOSSMate Roadmap
 
-## Vision
+## Direction
 
-Provide an installable AI maintainer assistant that helps open-source projects handle triage, onboarding, and repository Q&A with minimal manual overhead.
+Build an installable, self-hostable AI maintainer assistant where the core workflow does not require proprietary APIs.
 
 ## Phase 1: Foundation (Current)
 
-- FastAPI backend scaffold
-- Config system and validation
-- Webhook ingestion + signature verification
-- Async DB persistence
-- Pluggable LLM provider interface
+- FastAPI scaffold
+- Webhook verification + persistence
+- Provider abstraction
+- Async DB layer
 
-## Phase 2: Maintainer Automation
+## Phase 2: OSS-Core Automation
 
-- `issues.opened`: concise issue summaries
-- Automatic label suggestions
-- `issue_comment.created`: onboarding reply for contributor intent
+- `issues.opened`: summary + label suggestion
+- `issue_comment.created`: onboarding intent replies
 - `pull_request.opened`: PR summary
+- Ollama/local model baseline prompts
 
-## Phase 3: Repository Intelligence (RAG)
+## Phase 3: OSS RAG Pipeline
 
-- Repo ingestion for code/docs
-- Structured chunking by file and symbol
-- Embedding generation + Qdrant indexing
-- Retrieval with source references
+- Repo ingestion (`.py`, `.js`, `.ts`, `.md`, README, CONTRIBUTING)
+- Smart chunking
+- Embeddings + Qdrant indexing
+- Source-cited answers
 
-## Phase 4: Production Readiness
+## Phase 4: Reliability and Scale
 
-- Dedicated background workers
-- Retries and dead-letter strategy
-- Telemetry and tracing
-- Multi-tenant installation configuration
-- Integration tests + CI
+- Queue workers and retry semantics
+- Idempotency and replay safety
+- Observability and metrics
+- Multi-installation configuration
+- CI and integration tests
 
-## Stretch Goals
+## Optional Adapter Track
 
-- Auto-generated release notes
-- AI-assisted stale issue management
-- Maintainer triage dashboards
-- Fine-grained per-repo policy prompts
+- Keep proprietary providers (Gemini/OpenAI) as optional adapters.
+- Ensure features land first on OSS-core provider path.
