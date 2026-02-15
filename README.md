@@ -129,6 +129,12 @@ In GitHub App settings:
 - Webhook URL: `https://<public-domain>/webhooks/github`
 - Webhook secret: exact `GITHUB_WEBHOOK_SECRET` value from `.env`
 
+Recommended local auth setup:
+
+- Set `GITHUB_APP_ID` to your real app id.
+- Set `GITHUB_PRIVATE_KEY_PATH` to your downloaded `.pem` file path.
+- Keep `GITHUB_PRIVATE_KEY` empty when using the path-based option.
+
 Recommended permissions:
 
 - Issues: Read & write
@@ -159,7 +165,8 @@ Local PAT fallback note:
 | `APP_ENV` | No | `development`, `staging`, `production` |
 | `LOG_LEVEL` | No | Logging level |
 | `GITHUB_APP_ID` | Yes | GitHub App ID |
-| `GITHUB_PRIVATE_KEY` | Yes | GitHub App private key |
+| `GITHUB_PRIVATE_KEY` | Yes* | GitHub App private key (inline) |
+| `GITHUB_PRIVATE_KEY_PATH` | Yes* | Path to GitHub App `.pem` private key (recommended) |
 | `GITHUB_WEBHOOK_SECRET` | Yes | Webhook signature secret |
 | `GITHUB_TOKEN` | No | Local fallback token when running without App private key |
 | `LLM_PROVIDER` | Yes | `ollama`, `custom`, `gemini`, `openai`, `openrouter`, `azure_openai`, `deepseek`, `deepseek_r1` |
@@ -179,6 +186,8 @@ Local PAT fallback note:
 | `LLM_EMBEDDING_MODEL` | No | Embedding model identifier |
 | `QDRANT_URL` | No | `in-memory` or Qdrant URL |
 | `DATABASE_URL` | No | SQLAlchemy async DB URL |
+
+\* Provide either `GITHUB_PRIVATE_KEY` or `GITHUB_PRIVATE_KEY_PATH`.
 
 ## Current Endpoints
 
