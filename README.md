@@ -1,79 +1,44 @@
 # FOSSMate
 
-FOSSMate is an open-source GitHub App backend that helps maintainers triage issues, support contributors, and answer repository questions with retrieval-augmented context.
+FOSSMate is an open-source GitHub App that helps maintainers with issue triage, contributor onboarding, PR summaries, and review suggestions.
 
+Core promise:
+- Install the app on a repository.
+- FOSSMate runs on webhook events.
+- Maintainers get automated comments/labels/review output.
 
-## Some screenshots 
-<img width="1532" height="1077" alt="Screenshot 2026-02-16 at 12 48 12 AM" src="https://github.com/user-attachments/assets/c89d2828-3d3e-4986-965b-8ec698d5dcf0" />
-<img width="1147" height="1079" alt="Screenshot 2026-02-16 at 12 48 29 AM" src="https://github.com/user-attachments/assets/7a874a47-e96e-4bb4-8208-bfc8d27c2a36" />
+## Current Status
 
+Working now:
+- GitHub App authentication (JWT + installation tokens)
+- Webhook verification + idempotent delivery logging
+- Async event processing queue
+- `issues.opened`: issue summary + label suggestions + label apply attempt
+- `issue_comment.created`: onboarding intent detection + maintainer-ready reply
+- `pull_request.opened` and `pull_request.synchronize`: PR summary + per-file summaries + suggestions + advisory score
+- PR review comment posting
+- SQLite persistence for events, runs, findings, and scores
+- Multi-provider LLM abstraction (Ollama default, Gemini/OpenAI/OpenRouter/custom adapters)
 
+In progress:
+- Check Run publishing depends on GitHub App `Checks: Read and write` permission
+- RAG ingestion/retrieval production hardening
+- Advanced reporting and reliability controls
 
+## Documentation
 
-## OSS-First Core Principle
+Start here if you are new:
+- [Beginner Setup Guide](docs/GETTING_STARTED.md)
 
-FOSSMate core functionality is designed to run without closed-source APIs.
+How the system works internally:
+- [Working Logic and Architecture](docs/WORKING_LOGIC.md)
 
-Core stack:
+Additional docs:
+- [Operating Model](docs/OPERATING_MODEL.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Screenshots Guide](docs/SCREENSHOTS.md)
 
-- FastAPI backend
-- SQLite/Postgres metadata store
-- Qdrant vector store
-- Ollama/local or self-hosted inference endpoints
-
-Proprietary model APIs (Gemini/OpenAI) are supported only as optional adapters for MVP experimentation. They are not required for the architecture, deployment model, or roadmap.
-
-## Project Status
-
-`MVP scaffold` with production-oriented structure.
-
-Implemented now:
-
-- GitHub webhook ingestion with signature verification
-- Idempotent delivery logging and queue-backed async processing
-- Issue automation (`issues.opened` summary + label suggestion, `issue_comment.created` onboarding intent replies)
-- PR automation (`pull_request.opened/synchronize` summary, file-level notes, suggestions, advisory scoring)
-- Persistent review artifacts (`review_runs`, `review_findings`, `score_cards`, `developer_metrics`)
-- Provider abstraction layer with fallback and multi-provider matrix
-- Async FastAPI + SQLAlchemy foundation with admin replay/status endpoints
-
-Planned next:
-
-- Real issue/PR automation handlers
-- Ingestion + chunking + indexing
-- RAG answers with source references
-- Worker queue and reliability controls
-- GitLab adapter after GitHub production stabilization
-
-## How It Works
-
-```mermaid
-flowchart LR
-  A[GitHub Webhook] --> B[Verify Signature]
-  B --> C[Persist Event]
-  C --> D[Background Worker]
-  D --> E[Retriever Qdrant]
-  D --> F[Inference Provider]
-  D --> G[GitHub Comment or Label Action]
-```
-
-## Repository Layout
-
-```text
-.
-├── backend/
-│   ├── app/
-│   ├── requirements.txt
-│   └── test_llm.py
-├── docs/
-├── scripts/
-│   └── setup_github_app.py
-├── .env.example
-├── docker-compose.yml
-└── README.md
-```
-
-## Quick Start (Self-Hosted)
+## Quick Start (Conda + Local)
 
 ```bash
 git clone https://github.com/Zenkai-src/FOSSMate.git
@@ -97,107 +62,59 @@ Health check:
 curl http://127.0.0.1:8000/health
 ```
 
-## Default Open-Source Inference Path
+## Required GitHub App Permissions
 
-Default configuration uses local Ollama (no proprietary API dependency):
-
-```env
-LLM_PROVIDER=ollama
-LLM_ENDPOINT=http://localhost:11434
-LLM_MODEL_NAME=llama3.1
-```
-
-Pull model locally:
-
-```bash
-ollama pull llama3.1
-```
-
-## Optional Proprietary Adapters (Not Required)
-
-You can optionally use Gemini/OpenAI/OpenRouter/custom OpenAI-compatible endpoints for MVP speed:
-
-- `LLM_PROVIDER=gemini`
-- `LLM_PROVIDER=openai`
-- `LLM_PROVIDER=openrouter`
-- `LLM_PROVIDER=custom`
-
-These are adapters only; core architecture remains provider-independent.
-
-## GitHub App Setup (Actual Repositories)
-
-Generate checklist:
-
-```bash
-python scripts/setup_github_app.py --print-checklist
-```
-
-In GitHub App settings:
-
-- Webhook URL: `https://<public-domain>/webhooks/github`
-- Webhook secret: exact `GITHUB_WEBHOOK_SECRET` value from `.env`
-
-Recommended local auth setup:
-
-- Set `GITHUB_APP_ID` to your real app id.
-- Set `GITHUB_PRIVATE_KEY_PATH` to your downloaded `.pem` file path.
-- Keep `GITHUB_PRIVATE_KEY` empty when using the path-based option.
-
-Recommended permissions:
-
-- Issues: Read & write
-- Pull requests: Read & write
-- Checks: Read & write
+- Issues: Read and write
+- Pull requests: Read and write
+- Checks: Read and write
 - Contents: Read-only
 - Metadata: Read-only
 
-Recommended events:
-
+Required webhook events:
 - Issues
 - Issue comment
 - Pull request
 - Installation
 - Installation repositories
 
-Install app on target repos, then open an issue/PR to trigger webhook flow.
-
-Local PAT fallback note:
-
-- `GITHUB_TOKEN` is for local-only fallback when app private key is not configured.
-- That token must include permissions to write issue comments/labels and check runs, otherwise GitHub returns `403`.
-
 ## Environment Variables
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `APP_ENV` | No | `development`, `staging`, `production` |
-| `LOG_LEVEL` | No | Logging level |
 | `GITHUB_APP_ID` | Yes | GitHub App ID |
-| `GITHUB_PRIVATE_KEY` | Yes* | GitHub App private key (inline) |
-| `GITHUB_PRIVATE_KEY_PATH` | Yes* | Path to GitHub App `.pem` private key (recommended) |
-| `GITHUB_WEBHOOK_SECRET` | Yes | Webhook signature secret |
-| `GITHUB_TOKEN` | No | Local fallback token when running without App private key |
-| `LLM_PROVIDER` | Yes | `ollama`, `custom`, `gemini`, `openai`, `openrouter`, `azure_openai`, `deepseek`, `deepseek_r1` |
+| `GITHUB_PRIVATE_KEY` | Yes* | Inline private key PEM |
+| `GITHUB_PRIVATE_KEY_PATH` | Yes* | Path to `.pem` file (recommended) |
+| `GITHUB_WEBHOOK_SECRET` | Yes | Secret used for signature verification |
+| `GITHUB_TOKEN` | No | Local fallback only (not recommended for production) |
+| `LLM_PROVIDER` | Yes | `ollama`, `gemini`, `openai`, `openrouter`, `custom`, `azure_openai`, `deepseek`, `deepseek_r1` |
 | `LLM_MODEL_NAME` | Yes | Model name |
-| `LLM_ENDPOINT` | Depends | Required for `ollama/custom` |
-| `LLM_API_KEY` | Depends | Required for `gemini/openai/openrouter/custom/azure/deepseek` |
-| `LLM_FALLBACK_PROVIDER` | No | Optional fallback provider (`none` by default) |
-| `QUEUE_WORKERS` | No | In-memory queue worker count |
-| `FEATURE_PR_SUMMARY` | No | Feature flag for PR summary generation |
-| `FEATURE_FILE_SUMMARY` | No | Feature flag for per-file summaries |
-| `FEATURE_REVIEW_SUGGESTIONS` | No | Feature flag for review suggestions |
-| `FEATURE_SCORING` | No | Feature flag for advisory scoring |
-| `FEATURE_COMMIT_TRIGGER` | No | Feature flag for PR synchronize re-runs |
-| `FEATURE_EMAIL_REPORTS` | No | Feature flag for email report channel |
-| `FEATURE_DEVELOPER_EVAL` | No | Feature flag for developer evaluation data |
-| `FEATURE_GITLAB` | No | Enables `/webhooks/gitlab` endpoint (`false` by default) |
-| `LLM_EMBEDDING_MODEL` | No | Embedding model identifier |
-| `QDRANT_URL` | No | `in-memory` or Qdrant URL |
+| `LLM_ENDPOINT` | Depends | Needed for `ollama/custom` and some adapters |
+| `LLM_API_KEY` | Depends | Needed for provider APIs |
 | `DATABASE_URL` | No | SQLAlchemy async DB URL |
+| `QDRANT_URL` | No | `in-memory` or qdrant URL |
+| `QUEUE_WORKERS` | No | Number of async queue workers |
+| `FEATURE_PR_SUMMARY` | No | Enable PR summary generation |
+| `FEATURE_FILE_SUMMARY` | No | Enable per-file summaries |
+| `FEATURE_REVIEW_SUGGESTIONS` | No | Enable review suggestions |
+| `FEATURE_SCORING` | No | Enable advisory scoring |
+| `FEATURE_COMMIT_TRIGGER` | No | Re-run on PR synchronize events |
+| `FEATURE_GITLAB` | No | Enables `/webhooks/gitlab` endpoint |
 
-\* Provide either `GITHUB_PRIVATE_KEY` or `GITHUB_PRIVATE_KEY_PATH`.
+\* Use either `GITHUB_PRIVATE_KEY` or `GITHUB_PRIVATE_KEY_PATH`.
 
-## Current Endpoints
+## Helpful Script
+
+Print a setup checklist from local `.env`:
+
+```bash
+python scripts/setup_github_app.py --print-checklist
+```
+
+## Screenshot Policy
+
+Use `docs/SCREENSHOTS.md` for required capture list, naming, and redaction rules.
+
+## API Endpoints
 
 - `GET /health`
 - `POST /webhooks/github`
@@ -209,18 +126,8 @@ Local PAT fallback note:
 - `POST /admin/installations/{id}/replay/{event_id}`
 - `GET /reports/developer-evaluation`
 
-Optional endpoint (disabled by default):
-
-- `POST /webhooks/gitlab` (requires `FEATURE_GITLAB=true`)
-
-## Roadmap Docs
-
-- `docs/ROADMAP.md`
-- `docs/OPERATING_MODEL.md`
-
-## Contributing
-
-See `CONTRIBUTING.md`.
+Optional:
+- `POST /webhooks/gitlab` (when `FEATURE_GITLAB=true`)
 
 ## License
 

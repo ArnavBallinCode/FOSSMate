@@ -1,36 +1,53 @@
 # FOSSMate Operating Model
 
-## Core Guarantee
+## Product Modes
 
-FOSSMate core automation and retrieval path must run on open/self-hosted infrastructure.
+FOSSMate is designed for two operating modes:
 
-Required core services:
+1. Managed deployment
+- End users install the GitHub App.
+- FOSSMate is hosted and maintained by operators.
+- No local infrastructure needed for maintainers.
 
-- GitHub App webhook endpoint
-- Async processing layer
-- SQL metadata store
+2. Self-hosted deployment
+- Teams run backend and infrastructure themselves.
+- Same webhook/event model, different hosting ownership.
+
+## Core Principle
+
+Core functionality must remain available on OSS infrastructure:
+- FastAPI backend
+- SQLite/Postgres metadata store
 - Qdrant vector store
-- Local or self-hosted inference (default: Ollama)
+- Ollama/local or self-hosted inference endpoints
 
-## Adapter Policy
+Proprietary APIs are optional adapters, not architectural dependencies.
 
-- Proprietary providers are optional adapters.
-- No core feature should be blocked on Gemini/OpenAI availability.
-- Adapter-specific logic should remain isolated in provider classes.
+## Runtime Responsibilities
 
-## Event Lifecycle
+- Validate and ingest webhooks
+- Normalize events and queue processing
+- Execute issue/PR automation logic
+- Write results back to GitHub (comments, labels, checks)
+- Persist operational records for replay/audit/reporting
 
-1. GitHub sends event to `/webhooks/github`.
-2. Signature verified with webhook secret.
-3. Payload persisted to `webhook_events`.
-4. Background handler processes event.
-5. Handler retrieves context (when indexed) from Qdrant.
-6. Inference provider generates output.
-7. Response is posted to GitHub and outcome persisted.
+## Security Model
 
-## Maintainer Experience
+- GitHub App JWT + installation token flow is default auth path
+- Webhook signatures are required
+- Secrets are env-managed; never hardcoded
+- Private key files (`.pem`) must be excluded from version control
 
-- Install app on repository.
-- Keep normal issue/PR workflow.
-- Receive summaries, suggestions, and onboarding guidance automatically.
-- Tune behavior via installation-level config (planned).
+## Reliability Model
+
+- Idempotency keys prevent duplicate work
+- Delivery state machine: `queued -> processing -> done/failed`
+- Replay endpoints support recovery from transient failures
+- Feature flags support staged rollout per installation
+
+## Maintainer Experience Goal
+
+A maintainer should:
+1. Install the app
+2. Continue normal issue/PR workflow
+3. Receive automated triage and review assistance with minimal setup friction

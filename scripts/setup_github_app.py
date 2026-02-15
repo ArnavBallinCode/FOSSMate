@@ -35,6 +35,7 @@ def build_permissions() -> list[str]:
         "Repository permissions:",
         "  - Issues: Read & write",
         "  - Pull requests: Read & write",
+        "  - Checks: Read & write",
         "  - Contents: Read-only",
         "  - Metadata: Read-only",
         "",
@@ -91,7 +92,9 @@ def print_checklist(values: dict[str, str]) -> None:
 
     print("5) Verify end-to-end")
     print("   - Start backend: cd backend && uvicorn app.main:app --reload --port 8000")
-    print("   - Open an issue in installed repo")
+    print("   - Open an issue in installed repo (expect summary + labels)")
+    print("   - Comment: 'How can I work on this issue?' (expect onboarding reply)")
+    print("   - Open a PR (expect review comment and check-run)")
     print("   - Confirm webhook accepted in API logs and DB")
 
 
