@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     feature_email_reports: bool = Field(default=False, validation_alias="FEATURE_EMAIL_REPORTS")
     feature_developer_eval: bool = Field(default=False, validation_alias="FEATURE_DEVELOPER_EVAL")
     feature_gitlab: bool = Field(default=False, validation_alias="FEATURE_GITLAB")
+    feature_comment_auto_reply: bool = Field(
+        default=True, validation_alias="FEATURE_COMMENT_AUTO_REPLY"
+    )
+    feature_comment_reply_all: bool = Field(
+        default=True, validation_alias="FEATURE_COMMENT_REPLY_ALL"
+    )
+    assistant_handle: str = Field(default="fossmate", validation_alias="ASSISTANT_HANDLE")
 
     email_enabled: bool = Field(default=False, validation_alias="EMAIL_ENABLED")
     email_from: str | None = Field(default=None, validation_alias="EMAIL_FROM")
@@ -107,6 +114,11 @@ class Settings(BaseSettings):
     email_smtp_port: int = Field(default=587, validation_alias="EMAIL_SMTP_PORT")
     email_smtp_username: str | None = Field(default=None, validation_alias="EMAIL_SMTP_USERNAME")
     email_smtp_password: str | None = Field(default=None, validation_alias="EMAIL_SMTP_PASSWORD")
+    gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
+    auto_gemini_fallback: bool = Field(default=True, validation_alias="AUTO_GEMINI_FALLBACK")
+    gemini_fallback_model: str = Field(
+        default="gemini-2.0-flash", validation_alias="GEMINI_FALLBACK_MODEL"
+    )
 
     @field_validator("github_app_id", "github_private_key", "github_webhook_secret", mode="before")
     @classmethod
@@ -129,6 +141,8 @@ class Settings(BaseSettings):
         "openrouter_site_url",
         "openrouter_app_name",
         "github_private_key_path",
+        "assistant_handle",
+        "gemini_api_key",
         mode="before",
     )
     @classmethod
@@ -140,6 +154,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_required_config(self) -> "Settings":
+        if self.llm_provider == "gemini" and not self.llm_api_key and self.gemini_api_key:
+            self.llm_api_key = self.gemini_api_key
+
         missing_github = [
             key
             for key, value in {
@@ -214,12 +231,24 @@ class Settings(BaseSettings):
             "commit_trigger": self.feature_commit_trigger,
             "email_reports": self.feature_email_reports,
             "developer_eval": self.feature_developer_eval,
+            "comment_auto_reply": self.feature_comment_auto_reply,
+            "comment_reply_all": self.feature_comment_reply_all,
         }
 
     @property
     def fallback_llm_config(self) -> dict[str, Any] | None:
         """Return fallback provider config when enabled."""
         if self.llm_fallback_provider == "none":
+            inferred_gemini_key = self.gemini_api_key
+            if not inferred_gemini_key and self.llm_provider == "ollama":
+                inferred_gemini_key = self.llm_api_key
+            if self.auto_gemini_fallback and self.llm_provider != "gemini" and inferred_gemini_key:
+                return {
+                    "provider": "gemini",
+                    "api_key": inferred_gemini_key,
+                    "model_name": self.gemini_fallback_model,
+                    "endpoint": None,
+                }
             return None
         return {
             "provider": self.llm_fallback_provider,
