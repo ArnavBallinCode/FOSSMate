@@ -1,39 +1,41 @@
 # FOSSMate Roadmap
 
-## Direction
+## Phase 1 (Completed Foundations)
 
-Build an installable, self-hostable AI maintainer assistant where the core workflow does not require proprietary APIs.
+- FastAPI backend scaffold
+- GitHub webhook verification and normalization
+- Async queue + worker boundary
+- Database persistence for deliveries and review artifacts
+- LLM abstraction with provider adapters
 
-## Phase 1: Foundation (Current)
+## Phase 2 (Current Core Automation)
 
-- FastAPI scaffold
-- Webhook verification + persistence
-- Provider abstraction
-- Async DB layer
+- `issues.opened`: summary + label suggestion/apply path
+- `issue_comment.created`: onboarding intent reply
+- `pull_request.opened` and `pull_request.synchronize`: summaries, suggestions, advisory scoring
+- PR comment publishing
+- Check Run publishing path (permission-dependent)
 
-## Phase 2: OSS-Core Automation
+## Phase 3 (Near-Term)
 
-- `issues.opened`: summary + label suggestion
-- `issue_comment.created`: onboarding intent replies
-- `pull_request.opened`: PR summary
-- Ollama/local model baseline prompts
+- RAG ingestion hardening (`README`, `CONTRIBUTING`, code/docs chunking)
+- source-grounded responses with references
+- stronger retries/backoff and dead-letter behavior
+- installation-level policy controls
 
-## Phase 3: OSS RAG Pipeline
+## Phase 4 (Scale + Productization)
 
-- Repo ingestion (`.py`, `.js`, `.ts`, `.md`, README, CONTRIBUTING)
-- Smart chunking
-- Embeddings + Qdrant indexing
-- Source-cited answers
-
-## Phase 4: Reliability and Scale
-
-- Queue workers and retry semantics
-- Idempotency and replay safety
-- Observability and metrics
-- Multi-installation configuration
-- CI and integration tests
+- durable queue backend
+- observability (metrics/traces/delivery dashboards)
+- policy templates for organizations
+- managed deployment runbooks and SLOs
 
 ## Optional Adapter Track
 
-- Keep proprietary providers (Gemini/OpenAI) as optional adapters.
-- Ensure features land first on OSS-core provider path.
+- Keep Gemini/OpenAI/OpenRouter/custom adapters for flexibility
+- Ensure OSS provider path remains first-class
+
+## Post-Stabilization Expansion
+
+- GitLab adapter (deferred until GitHub path is production-stable)
+- email reporting and developer evaluation workflows
