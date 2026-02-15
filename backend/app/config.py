@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     github_app_id: str = Field(default="", validation_alias="GITHUB_APP_ID")
     github_private_key: str = Field(default="", validation_alias="GITHUB_PRIVATE_KEY")
+    github_private_key_path: str | None = Field(default=None, validation_alias="GITHUB_PRIVATE_KEY_PATH")
     github_webhook_secret: str = Field(default="", validation_alias="GITHUB_WEBHOOK_SECRET")
     github_token: str | None = Field(default=None, validation_alias="GITHUB_TOKEN")
     ngrok_authtoken: str | None = Field(default=None, validation_alias="NGROK_AUTHTOKEN")
@@ -127,6 +128,7 @@ class Settings(BaseSettings):
         "gitlab_webhook_secret",
         "openrouter_site_url",
         "openrouter_app_name",
+        "github_private_key_path",
         mode="before",
     )
     @classmethod
@@ -142,11 +144,12 @@ class Settings(BaseSettings):
             key
             for key, value in {
                 "GITHUB_APP_ID": self.github_app_id,
-                "GITHUB_PRIVATE_KEY": self.github_private_key,
                 "GITHUB_WEBHOOK_SECRET": self.github_webhook_secret,
             }.items()
             if not value
         ]
+        if not self.github_private_key and not self.github_private_key_path:
+            missing_github.append("GITHUB_PRIVATE_KEY or GITHUB_PRIVATE_KEY_PATH")
         if missing_github:
             joined = ", ".join(missing_github)
             raise ValueError(f"Missing required GitHub settings: {joined}")
@@ -188,6 +191,11 @@ class Settings(BaseSettings):
     @property
     def github_private_key_pem(self) -> str:
         """Return PEM key with escaped newlines normalized for JWT signing."""
+        if self.github_private_key_path:
+            path = Path(self.github_private_key_path).expanduser()
+            if not path.exists():
+                raise ValueError(f"GITHUB_PRIVATE_KEY_PATH does not exist: {path}")
+            return path.read_text(encoding="utf-8")
         return self.github_private_key.replace("\\n", "\n")
 
     @property
