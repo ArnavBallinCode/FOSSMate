@@ -2,6 +2,14 @@
 
 FOSSMate is an open-source GitHub App backend that helps maintainers triage issues, support contributors, and answer repository questions with retrieval-augmented context.
 
+
+## Some screenshots 
+<img width="1532" height="1077" alt="Screenshot 2026-02-16 at 12 48 12 AM" src="https://github.com/user-attachments/assets/c89d2828-3d3e-4986-965b-8ec698d5dcf0" />
+<img width="1147" height="1079" alt="Screenshot 2026-02-16 at 12 48 29 AM" src="https://github.com/user-attachments/assets/7a874a47-e96e-4bb4-8208-bfc8d27c2a36" />
+
+
+
+
 ## OSS-First Core Principle
 
 FOSSMate core functionality is designed to run without closed-source APIs.
