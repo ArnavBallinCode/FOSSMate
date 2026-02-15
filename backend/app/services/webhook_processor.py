@@ -1,0 +1,395 @@
+"""Webhook processing worker logic."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import logging
+import time
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.config import Settings
+from app.models.database import (
+    DeliveryLog,
+    DeveloperMetric,
+    InstallationSetting,
+    ReviewFinding,
+    ReviewRun,
+    ScoreCardModel,
+)
+from app.models.schemas import NormalizedEvent, NotificationPayload
+from app.services.github_service import GitHubService
+from app.services.notification_service import NotificationService
+from app.services.review_service import ReviewService
+
+logger = logging.getLogger(__name__)
+
+
+class WebhookProcessor:
+    """Process normalized events from queue and persist review artifacts."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        session_factory: async_sessionmaker[AsyncSession],
+        github_service: GitHubService,
+        review_service: ReviewService,
+        notification_service: NotificationService,
+    ) -> None:
+        self.settings = settings
+        self.session_factory = session_factory
+        self.github_service = github_service
+        self.review_service = review_service
+        self.notification_service = notification_service
+
+    async def process_delivery_log(self, payload: dict) -> None:
+        """Queue handler entrypoint."""
+        delivery_log_id = int(payload["delivery_log_id"])
+        async with self.session_factory() as session:
+            delivery_log = await session.get(DeliveryLog, delivery_log_id)
+            if delivery_log is None:
+                logger.warning("Delivery log %s missing", delivery_log_id)
+                return
+
+            if delivery_log.status == "done":
+                return
+
+            delivery_log.status = "processing"
+            delivery_log.error_message = None
+            await session.commit()
+
+        try:
+            async with self.session_factory() as session:
+                await self._process(session, delivery_log_id)
+        except Exception as exc:  # pragma: no cover - runtime safety
+            logger.exception("Delivery processing failed id=%s", delivery_log_id)
+            async with self.session_factory() as session:
+                failed = await session.get(DeliveryLog, delivery_log_id)
+                if failed is not None:
+                    failed.status = "failed"
+                    failed.error_message = str(exc)
+                    await session.commit()
+
+    async def _process(self, session: AsyncSession, delivery_log_id: int) -> None:
+        delivery_log = await session.get(DeliveryLog, delivery_log_id)
+        if delivery_log is None:
+            return
+
+        normalized = NormalizedEvent.model_validate(delivery_log.normalized_event)
+        installation_flags = await self._get_feature_flags(session, normalized.installation_id)
+
+        if normalized.platform == "github":
+            await self._process_github_event(session, delivery_log, normalized, installation_flags)
+        elif normalized.platform == "gitlab":
+            await self._process_gitlab_event(session, delivery_log, normalized)
+        else:
+            logger.info("Unknown platform '%s' for delivery_log=%s", normalized.platform, delivery_log.id)
+
+        delivery_log.status = "done"
+        await session.commit()
+
+    async def _process_github_event(
+        self,
+        session: AsyncSession,
+        delivery_log: DeliveryLog,
+        event: NormalizedEvent,
+        feature_flags: dict[str, bool],
+    ) -> None:
+        if event.event_type == "pull_request" and event.action in {"opened", "synchronize"}:
+            if event.action == "synchronize" and not feature_flags.get("commit_trigger", True):
+                return
+            if not event.repository_full_name or event.pr_number is None:
+                await self._record_non_pr_run(
+                    session=session,
+                    delivery_log_id=delivery_log.id,
+                    event=event,
+                    run_type="pull_request_skipped",
+                    status="done",
+                    result_json={"reason": "missing repository/pr metadata"},
+                )
+                return
+            await self._run_pull_request_review(session, delivery_log, event, feature_flags)
+            return
+
+        if event.event_type == "issues" and event.action == "opened":
+            summary = await self.review_service.summarize_issue(event)
+            await self._record_non_pr_run(
+                session=session,
+                delivery_log_id=delivery_log.id,
+                event=event,
+                run_type="issue_summary",
+                status="done",
+                result_json={"summary": summary},
+            )
+            if event.installation_id and event.repository_full_name and event.issue_number:
+                marker = "<!-- fossmate:issue-summary -->"
+                await self.github_service.upsert_issue_comment(
+                    repository_full_name=event.repository_full_name,
+                    issue_number=event.issue_number,
+                    installation_id=event.installation_id,
+                    body=summary,
+                    marker=marker,
+                )
+            return
+
+        if event.event_type == "issue_comment" and event.action == "created":
+            comment_text = str(event.payload.get("comment", {}).get("body", "")).lower()
+            if "can i work on this" not in comment_text and "i can work on this" not in comment_text:
+                return
+
+            reply = await self.review_service.onboarding_reply(event)
+            await self._record_non_pr_run(
+                session=session,
+                delivery_log_id=delivery_log.id,
+                event=event,
+                run_type="issue_onboarding",
+                status="done",
+                result_json={"reply": reply},
+            )
+            if event.installation_id and event.repository_full_name and event.issue_number:
+                marker = "<!-- fossmate:onboarding -->"
+                await self.github_service.upsert_issue_comment(
+                    repository_full_name=event.repository_full_name,
+                    issue_number=event.issue_number,
+                    installation_id=event.installation_id,
+                    body=reply,
+                    marker=marker,
+                )
+
+    async def _process_gitlab_event(
+        self,
+        session: AsyncSession,
+        delivery_log: DeliveryLog,
+        event: NormalizedEvent,
+    ) -> None:
+        await self._record_non_pr_run(
+            session=session,
+            delivery_log_id=delivery_log.id,
+            event=event,
+            run_type="gitlab_event_received",
+            status="done",
+            result_json={"message": "GitLab processing pipeline placeholder accepted event."},
+        )
+
+    async def _run_pull_request_review(
+        self,
+        session: AsyncSession,
+        delivery_log: DeliveryLog,
+        event: NormalizedEvent,
+        feature_flags: dict[str, bool],
+    ) -> None:
+        started = time.perf_counter()
+        run = ReviewRun(
+            delivery_log_id=delivery_log.id,
+            installation_id=event.installation_id,
+            platform=event.platform,
+            run_type="pull_request_review",
+            status="processing",
+            provider=self.review_service.llm_provider.provider_name,
+            model_name=self.review_service.llm_provider.model_name,
+            repository_full_name=event.repository_full_name,
+            pr_number=event.pr_number,
+            actor_login=event.sender_login,
+            result_json={},
+        )
+        session.add(run)
+        await session.commit()
+        await session.refresh(run)
+
+        result = await self.review_service.build_pr_review(event)
+        if not feature_flags.get("pr_summary", True):
+            result.pr_summary = "PR summary feature is disabled for this installation."
+        if not feature_flags.get("file_summary", True):
+            result.file_summaries = []
+        if not feature_flags.get("review_suggestions", True):
+            result.suggestions = []
+        if not feature_flags.get("scoring", True):
+            result.score_card.correctness = 0.0
+            result.score_card.readability = 0.0
+            result.score_card.maintainability = 0.0
+            result.score_card.overall = 0.0
+        run.status = "done"
+        run.latency_ms = int((time.perf_counter() - started) * 1000)
+        run.result_json = result.model_dump(mode="json")
+
+        for suggestion in result.suggestions:
+            session.add(
+                ReviewFinding(
+                    review_run_id=run.id,
+                    file_path=suggestion.file_path,
+                    title=suggestion.title,
+                    details=suggestion.details,
+                    severity=suggestion.severity,
+                )
+            )
+
+        session.add(
+            ScoreCardModel(
+                review_run_id=run.id,
+                correctness=result.score_card.correctness,
+                readability=result.score_card.readability,
+                maintainability=result.score_card.maintainability,
+                overall=result.score_card.overall,
+                advisory_only=result.score_card.advisory_only,
+            )
+        )
+
+        if event.sender_login:
+            session.add(
+                DeveloperMetric(
+                    installation_id=event.installation_id,
+                    platform=event.platform,
+                    repository_full_name=event.repository_full_name,
+                    developer_login=event.sender_login,
+                    review_run_id=run.id,
+                    correctness=result.score_card.correctness,
+                    readability=result.score_card.readability,
+                    maintainability=result.score_card.maintainability,
+                    overall=result.score_card.overall,
+                    measured_at=datetime.now(tz=timezone.utc),
+                )
+            )
+
+        await session.commit()
+
+        comment_body = self._format_pr_comment(result)
+        check_summary = self._format_check_run_summary(result)
+
+        if event.installation_id and event.repository_full_name and event.pr_number:
+            try:
+                await self.github_service.upsert_pull_request_comment(
+                    repository_full_name=event.repository_full_name,
+                    pr_number=event.pr_number,
+                    installation_id=event.installation_id,
+                    body=comment_body,
+                    marker="<!-- fossmate:pr-review -->",
+                )
+            except Exception:
+                logger.exception(
+                    "Failed posting PR review comment for %s#%s",
+                    event.repository_full_name,
+                    event.pr_number,
+                )
+
+            if event.head_sha:
+                try:
+                    await self.github_service.create_or_update_check_run(
+                        repository_full_name=event.repository_full_name,
+                        installation_id=event.installation_id,
+                        head_sha=event.head_sha,
+                        name="FOSSMate Review",
+                        summary=check_summary,
+                        external_id=str(run.id),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed creating check run for %s#%s",
+                        event.repository_full_name,
+                        event.pr_number,
+                    )
+
+        if feature_flags.get("email_reports"):
+            payload = NotificationPayload(
+                subject=f"FOSSMate Review: {event.repository_full_name}#{event.pr_number}",
+                body_text=check_summary,
+                recipients=[],
+            )
+            await self.notification_service.send_review_notification(payload)
+
+    async def _record_non_pr_run(
+        self,
+        session: AsyncSession,
+        delivery_log_id: int,
+        event: NormalizedEvent,
+        run_type: str,
+        status: str,
+        result_json: dict,
+    ) -> None:
+        session.add(
+            ReviewRun(
+                delivery_log_id=delivery_log_id,
+                installation_id=event.installation_id,
+                platform=event.platform,
+                run_type=run_type,
+                status=status,
+                provider=self.review_service.llm_provider.provider_name,
+                model_name=self.review_service.llm_provider.model_name,
+                repository_full_name=event.repository_full_name,
+                issue_number=event.issue_number,
+                actor_login=event.sender_login,
+                result_json=result_json,
+            )
+        )
+        await session.commit()
+
+    async def _get_feature_flags(
+        self,
+        session: AsyncSession,
+        installation_id: int | None,
+    ) -> dict[str, bool]:
+        defaults = self.settings.default_feature_flags
+        if installation_id is None:
+            return defaults
+
+        query = select(InstallationSetting).where(InstallationSetting.installation_id == installation_id)
+        setting = (await session.execute(query)).scalars().first()
+        if setting is None:
+            setting = InstallationSetting(
+                installation_id=installation_id,
+                locale="en",
+                feature_flags_json=defaults,
+                provider_config_json={
+                    "provider": self.settings.llm_provider,
+                    "model": self.settings.llm_model_name,
+                },
+            )
+            session.add(setting)
+            await session.commit()
+            return defaults
+
+        merged = defaults.copy()
+        for key, value in (setting.feature_flags_json or {}).items():
+            merged[key] = bool(value)
+        return merged
+
+    @staticmethod
+    def _format_pr_comment(result) -> str:
+        summary_lines = [
+            "### FOSSMate Automated Review",
+            "",
+            f"**Category**: `{result.category}`",
+            f"**Score (advisory)**: `{result.score_card.overall}/10`",
+            "",
+            "#### Summary",
+            result.pr_summary,
+            "",
+            "#### Major Files",
+        ]
+        if result.major_files:
+            summary_lines.extend([f"- `{path}`" for path in result.major_files])
+        else:
+            summary_lines.append("- No file details available.")
+
+        summary_lines.extend(["", "#### Suggestions (Experimental)"])
+        if result.suggestions:
+            for suggestion in result.suggestions:
+                target = f" ({suggestion.file_path})" if suggestion.file_path else ""
+                summary_lines.append(
+                    f"- **{suggestion.title}**{target}: {suggestion.details} "
+                    f"`[{suggestion.severity}]`"
+                )
+        else:
+            summary_lines.append("- No suggestions generated.")
+
+        return "\n".join(summary_lines)
+
+    @staticmethod
+    def _format_check_run_summary(result) -> str:
+        file_count = len(result.file_summaries)
+        return (
+            f"Category: {result.category}\n"
+            f"Overall score: {result.score_card.overall}/10 (advisory)\n"
+            f"Files summarized: {file_count}\n"
+            f"Suggestions: {len(result.suggestions)}"
+        )
